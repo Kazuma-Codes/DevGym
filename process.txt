@@ -1,0 +1,6 @@
+
+# to activate the virtual environment
+.venv\Scripts\activate
+
+# to run the project
+python manage.py runserver 8000

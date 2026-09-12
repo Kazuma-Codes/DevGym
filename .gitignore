@@ -29,3 +29,11 @@ yarn-error.log*
 .vscode/
 .idea/
 .DS_Store
+# Java / Maven
+server/target/
+*.class
+
+# H2/SQLite databases
+*.db
+*.db-shm
+*.db.mv.db

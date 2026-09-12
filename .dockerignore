@@ -1,0 +1,13 @@
+.git
+.venv
+venv
+**/__pycache__
+server/target
+frontend-react/node_modules
+frontend-react/dist
+node_modules
+*.db
+*.sqlite3
+.env
+docs
+.github

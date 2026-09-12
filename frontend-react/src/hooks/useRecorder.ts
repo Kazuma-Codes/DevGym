@@ -1,4 +1,27 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+function describeMicError(err: unknown): string {
+  if (err instanceof DOMException) {
+    switch (err.name) {
+      case "NotAllowedError":
+        return "Microphone permission was denied. Allow mic access in your browser settings and try again.";
+      case "NotFoundError":
+        return "No microphone was found. Connect a microphone and try again.";
+      case "NotReadableError":
+        return "Your microphone is busy or blocked by another app. Close other apps using it and retry.";
+      case "OverconstrainedError":
+        return "The selected microphone is not supported in this browser.";
+      default:
+        break;
+    }
+  }
+
+  if (typeof navigator !== "undefined" && !navigator.mediaDevices?.getUserMedia) {
+    return "Voice recording requires HTTPS (or localhost) in this browser.";
+  }
+
+  return "Microphone access failed. Please allow microphone permission.";
+}
 
 export function useRecorder() {
   const [recording, setRecording] = useState(false);
@@ -9,23 +32,48 @@ export function useRecorder() {
   const chunksRef = useRef<Blob[]>([]);
   const resolveRef = useRef<((blob: Blob | null) => void) | null>(null);
 
-  const start = async () => {
+  const release = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    mediaRecorderRef.current = null;
+    setRecording(false);
+  }, []);
+
+  // Stop the mic and finalize any pending recording when the component unmounts.
+  useEffect(() => {
+    return () => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.onstop = null;
+        recorder.stop();
+      }
+      if (resolveRef.current) {
+        resolveRef.current(null);
+        resolveRef.current = null;
+      }
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    };
+  }, []);
+
+  const start = useCallback(async () => {
     setError("");
 
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Voice recording requires HTTPS (or localhost) in this browser.");
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-      });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
       streamRef.current = stream;
 
-      const candidates = [
-        "audio/webm;codecs=opus",
-        "audio/webm",
-        "audio/mp4",
-      ];
+      const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
 
-      let options: MediaRecorderOptions = {};
+      const options: MediaRecorderOptions = {};
 
       for (const mimeType of candidates) {
         if (MediaRecorder.isTypeSupported(mimeType)) {
@@ -48,10 +96,7 @@ export function useRecorder() {
           type: recorder.mimeType || "audio/webm",
         });
 
-        stream.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-
-        setRecording(false);
+        release();
 
         if (resolveRef.current) {
           resolveRef.current(blob);
@@ -65,17 +110,17 @@ export function useRecorder() {
       setRecording(true);
     } catch (err) {
       console.error(err);
-      setError("Microphone access failed. Please allow microphone permission.");
-      setRecording(false);
+      setError(describeMicError(err));
+      release();
 
       if (resolveRef.current) {
         resolveRef.current(null);
         resolveRef.current = null;
       }
     }
-  };
+  }, [release]);
 
-  const stop = (): Promise<Blob | null> => {
+  const stop = useCallback((): Promise<Blob | null> => {
     return new Promise((resolve) => {
       const recorder = mediaRecorderRef.current;
 
@@ -87,12 +132,14 @@ export function useRecorder() {
       resolveRef.current = resolve;
       recorder.stop();
     });
-  };
+  }, []);
 
   return {
     recording,
     error,
     start,
     stop,
+    /** Silently release the microphone without resolving a blob. */
+    release,
   };
 }

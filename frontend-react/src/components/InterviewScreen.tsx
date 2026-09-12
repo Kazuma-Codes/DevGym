@@ -1,13 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
 import { useRecorder } from "../hooks/useRecorder";
+import { useCountdown } from "../hooks/useCountdown";
 import { submitAnswer, finishSession, getSummary } from "../api";
 
-import {
-  AnswerResponse,
-  InterviewMode,
-  SummaryResponse,
-} from "../types";
+import { AnswerResponse, InterviewMode, SummaryResponse } from "../types";
 
 interface Props {
   sessionId: string;
@@ -27,6 +24,20 @@ function formatTime(totalSeconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+function stopBrowserSpeech() {
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
+}
+
+function speakWithBrowser(text: string) {
+  stopBrowserSpeech();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1;
+  utterance.pitch = 1;
+  window.speechSynthesis.speak(utterance);
+}
+
 export default function InterviewScreen({
   sessionId,
   initialQuestion,
@@ -38,7 +49,7 @@ export default function InterviewScreen({
   initialQuestionNumber = 1,
   onViewAnalytics,
 }: Props) {
-  const { recording, error: micError, start, stop } = useRecorder();
+  const { recording, error: micError, start, stop, release } = useRecorder();
 
   const [question, setQuestion] = useState(initialQuestion);
   const [response, setResponse] = useState<AnswerResponse | null>(null);
@@ -48,9 +59,11 @@ export default function InterviewScreen({
   const [textAnswer, setTextAnswer] = useState("");
   const [inputMode, setInputMode] = useState<"voice" | "text">("voice");
   const [error, setError] = useState("");
-  const [timeLeft, setTimeLeft] = useState(timeLimit);
+  const [autoSpeak, setAutoSpeak] = useState(true);
 
   const finishingRef = useRef(false);
+  const processingRef = useRef(false);
+  processingRef.current = processing;
 
   const finishInterview = async () => {
     if (finishingRef.current) return;
@@ -61,55 +74,48 @@ export default function InterviewScreen({
       await finishSession(sessionId);
       const summary = await getSummary(sessionId);
       onViewAnalytics(summary);
-    } catch (err: any) {
-      setError(err?.message || "Could not finish interview.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not finish interview.");
     } finally {
       finishingRef.current = false;
     }
   };
 
-  useEffect(() => {
-    if (timeLimit <= 0 || finished) return;
-
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => Math.max(0, prev - 1));
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [timeLimit, finished]);
-
-  useEffect(() => {
-    if (timeLimit > 0 && timeLeft === 0 && !finished) {
-      finishInterview();
-    }
-  }, [timeLeft, finished]);
-
-  const speakQuestion = async () => {
-    if (!question) return;
-
-    try {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: question }),
-      });
-
-      if (res.ok) {
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audio.play();
-        return;
+  // Server-enforced time limit: stop the mic first so the blob is not lost,
+  // then finish the session.
+  const { timeLeft, stopEarly } = useCountdown(timeLimit, () => {
+    if (processingRef.current) return;
+    void (async () => {
+      if (recording) {
+        await stop();
       }
-    } catch {
-      // Fallback to browser SpeechSynthesis below
-    }
+      release();
+      await finishInterview();
+    })();
+  });
 
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(question);
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    window.speechSynthesis.speak(utterance);
+  // Auto-speak new questions with the browser's built-in voice.
+  useEffect(() => {
+    if (!finished && autoSpeak && question) {
+      speakWithBrowser(question);
+    }
+    return () => stopBrowserSpeech();
+  }, [question, finished, autoSpeak]);
+
+  const speakQuestion = () => {
+    if (!question) return;
+    speakWithBrowser(question);
+  };
+
+  const applyResponse = (res: AnswerResponse) => {
+    setResponse(res);
+    setQuestion(res.next_question);
+    setFinished(res.finished);
+    setQuestionNumber(res.question_number);
+
+    if (res.finished) {
+      stopBrowserSpeech();
+    }
   };
 
   const toggleRecording = async () => {
@@ -138,17 +144,9 @@ export default function InterviewScreen({
 
     try {
       const res = await submitAnswer(sessionId, form);
-
-      setResponse(res);
-      setQuestion(res.next_question);
-      setFinished(res.finished);
-      setQuestionNumber(res.question_number);
-
-      if (res.finished) {
-        window.speechSynthesis.cancel();
-      }
-    } catch (err: any) {
-      setError(err?.message || "Failed to submit answer.");
+      applyResponse(res);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to submit answer.");
     } finally {
       setProcessing(false);
     }
@@ -166,21 +164,22 @@ export default function InterviewScreen({
 
     try {
       const res = await submitAnswer(sessionId, form);
-
-      setResponse(res);
-      setQuestion(res.next_question);
-      setFinished(res.finished);
-      setQuestionNumber(res.question_number);
+      applyResponse(res);
       setTextAnswer("");
-
-      if (res.finished) {
-        window.speechSynthesis.cancel();
-      }
-    } catch (err: any) {
-      setError(err?.message || "Failed to submit answer.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to submit answer.");
     } finally {
       setProcessing(false);
     }
+  };
+
+  const manualFinish = async () => {
+    if (recording) {
+      stopEarly();
+      await stop();
+    }
+    release();
+    await finishInterview();
   };
 
   return (
@@ -198,6 +197,15 @@ export default function InterviewScreen({
           </span>
 
           {timeLimit > 0 && <span>⏱ {formatTime(timeLeft)}</span>}
+
+          <label className="auto-speak-toggle">
+            <input
+              type="checkbox"
+              checked={autoSpeak}
+              onChange={(e) => setAutoSpeak(e.target.checked)}
+            />
+            Auto-speak
+          </label>
         </div>
       </div>
 
@@ -280,7 +288,7 @@ export default function InterviewScreen({
             View Analytics
           </button>
         ) : (
-          <button className="danger-btn" onClick={finishInterview}>
+          <button className="danger-btn" onClick={manualFinish}>
             Finish Interview
           </button>
         )}
@@ -288,7 +296,10 @@ export default function InterviewScreen({
 
       {response && (
         <section className="card result-card">
-          <h2>Feedback</h2>
+          <h2>
+            Feedback
+            {response.overtime && <span className="chip danger"> answered late</span>}
+          </h2>
 
           <div className="metric-grid">
             <div className="metric-box">

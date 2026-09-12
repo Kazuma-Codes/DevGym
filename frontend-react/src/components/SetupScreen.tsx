@@ -5,6 +5,9 @@ interface Props {
   onStart: (payload: SetupPayload) => void;
   loading: boolean;
   error: string;
+  llmConfigured?: boolean;
+  onViewHistory: () => void;
+  onViewProgress: () => void;
 }
 
 const MODES: {
@@ -15,7 +18,7 @@ const MODES: {
   {
     id: "SUBJECT",
     title: "Subject Interview",
-    description: "OOP, DSA, DBMS, OS, CN",
+    description: "OOP, DSA, DBMS, OS, CN, Programming, CS Fundamentals",
   },
   {
     id: "RESUME",
@@ -49,7 +52,14 @@ const MODES: {
   },
 ];
 
-export default function SetupScreen({ onStart, loading, error }: Props) {
+export default function SetupScreen({
+  onStart,
+  loading,
+  error,
+  llmConfigured = true,
+  onViewHistory,
+  onViewProgress,
+}: Props) {
   const [mode, setMode] = useState<InterviewMode>("SUBJECT");
   const [subject, setSubject] = useState("OOP");
   const [difficulty, setDifficulty] = useState("easy");
@@ -97,9 +107,23 @@ export default function SetupScreen({ onStart, loading, error }: Props) {
       <div className="hero">
         <h1>AI Interview Platform</h1>
         <p>
-          Practice technical, behavioral, resume-based, and system design interviews
+          Practice CSE-core, behavioral, resume-based, and system design interviews
           with AI follow-ups and voice analytics.
         </p>
+        <div className="button-row">
+          <button className="ghost-btn" onClick={onViewHistory}>
+            📂 Session History
+          </button>
+          <button className="ghost-btn" onClick={onViewProgress}>
+            📈 Progress Dashboard
+          </button>
+        </div>
+        {!llmConfigured && (
+          <div className="info-box">
+            No GROQ_API_KEY configured — you can still practice with the built-in
+            CSE question bank and heuristic scoring.
+          </div>
+        )}
       </div>
 
       <section className="card">
@@ -136,6 +160,8 @@ export default function SetupScreen({ onStart, loading, error }: Props) {
                 <option value="OS">OS</option>
                 <option value="CN">CN</option>
                 <option value="SYSTEM_DESIGN">System Design</option>
+                <option value="PROGRAMMING">Programming (Python/Java/C++)</option>
+                <option value="CS_FUNDAMENTALS">CS Fundamentals</option>
               </select>
             </div>
           </div>

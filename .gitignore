@@ -37,3 +37,5 @@ server/target/
 *.db
 *.db-shm
 *.db.mv.db
+
+server/target/
